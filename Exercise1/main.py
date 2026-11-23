@@ -3,7 +3,8 @@ import tkinter as tk
 from tkinter import messagebox
 import random
 import os
-
+import tkinter.font as tkfont
+from PIL import Image, ImageTk
 # ---------------- WINDOW SETUP ----------------
 
 window = tk.Tk()
@@ -11,7 +12,21 @@ window.title("Maths Quiz")
 window.geometry("900x550")
 window.resizable(False, False)
 
+BASE_WIDTH = 900
+BASE_HEIGHT = 550
+
 folderPath = os.path.dirname(os.path.abspath(__file__))
+
+# Set the small feather logo as the application/window icon.
+# Keep iconImage as a variable so Tkinter does not discard the image.
+# Set the calculator logo in the Windows title bar
+# Load calculator icon for the window title bar
+iconPath = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "app_icon.ico"
+)
+
+window.iconbitmap(iconPath) 
 
 mainImage = tk.PhotoImage(
     file=os.path.join(folderPath, "background.png")
@@ -21,8 +36,10 @@ quizImage = tk.PhotoImage(
     file=os.path.join(folderPath, "quiz_background.png")
 )
 
-background = tk.Label(window, image=mainImage)
-background.place(x=0, y=0, width=900, height=550)
+background = tk.Label(window, image=mainImage, bd=0)
+background.place(x=0, y=0, width=BASE_WIDTH, height=BASE_HEIGHT)
+currentBackgroundPath = os.path.join(folderPath, "background.png")
+fullscreenBackground = None
 
 # ---------------- COLOURS AND FONTS ----------------
 
@@ -57,31 +74,212 @@ feedbackLabel = None
 attemptLabel = None
 scoreLabel = None
 progressCanvas = None
+isFullscreen = False
+
+
+# ---------------- FULL SCREEN CONTROL ----------------
+
+def getScaleFactors():
+    """Return the current horizontal and vertical layout scale."""
+    width = max(1, window.winfo_width())
+    height = max(1, window.winfo_height())
+
+    return width / BASE_WIDTH, height / BASE_HEIGHT
+
+
+def resizeBackground():
+    """Resize the active background image to cover the whole window."""
+    global fullscreenBackground
+
+    if isFullscreen:
+        width = max(1, window.winfo_width())
+        height = max(1, window.winfo_height())
+
+        image = Image.open(currentBackgroundPath).convert("RGB")
+        image = image.resize(
+            (width, height),
+            Image.Resampling.LANCZOS
+        )
+
+        fullscreenBackground = ImageTk.PhotoImage(image)
+        background.config(image=fullscreenBackground)
+        background.place(x=0, y=0, width=width, height=height)
+    else:
+        fullscreenBackground = None
+
+        if os.path.basename(currentBackgroundPath) == "background.png":
+            background.config(image=mainImage)
+        else:
+            background.config(image=quizImage)
+
+        background.place(x=0, y=0, width=BASE_WIDTH, height=BASE_HEIGHT)
+
+
+def scaleWidget(widget):
+    """Apply scaled position, size, font and wrapping to one widget."""
+    if not widget.winfo_exists():
+        return
+
+    scaleX, scaleY = getScaleFactors()
+    fontScale = min(scaleX, scaleY)
+
+    basePlace = getattr(widget, "_base_place", None)
+
+    if basePlace:
+        widget.place_configure(
+            x=round(basePlace["x"] * scaleX),
+            y=round(basePlace["y"] * scaleY),
+            width=max(1, round(basePlace["width"] * scaleX)),
+            height=max(1, round(basePlace["height"] * scaleY))
+        )
+
+    baseFont = getattr(widget, "_base_font", None)
+
+    if baseFont:
+        try:
+            actual = tkfont.Font(root=window, font=baseFont).actual()
+            scaledSize = max(7, round(abs(int(actual["size"])) * fontScale))
+
+            widget.configure(font=(
+                actual["family"],
+                scaledSize,
+                actual["weight"],
+                actual["slant"],
+                actual["underline"],
+                actual["overstrike"]
+            ))
+        except (tk.TclError, TypeError, ValueError):
+            pass
+
+    baseWraplength = getattr(widget, "_base_wraplength", None)
+
+    if baseWraplength is not None:
+        try:
+            widget.configure(
+                wraplength=max(1, round(baseWraplength * scaleX))
+            )
+        except tk.TclError:
+            pass
+
+
+def applyFullscreenLayout():
+    """Scale every registered widget to fit the current screen."""
+    resizeBackground()
+
+    for widget in screenWidgets:
+        scaleWidget(widget)
+
+    if progressCanvas is not None and progressCanvas.winfo_exists():
+        updateProgress()
+
+
+def toggleFullscreen():
+    """Switch between the original window and a screen-filling layout."""
+    global isFullscreen
+
+    isFullscreen = not isFullscreen
+
+    if isFullscreen:
+        window.attributes("-fullscreen", True)
+    else:
+        window.attributes("-fullscreen", False)
+        window.geometry(f"{BASE_WIDTH}x{BASE_HEIGHT}")
+
+    window.update_idletasks()
+    applyFullscreenLayout()
+
+
+def leaveFullscreen(event=None):
+    """Allow Escape to leave fullscreen mode."""
+    if isFullscreen:
+        toggleFullscreen()
+
+
+def addFullscreenButton():
+    """Add the fullscreen toggle to the current screen."""
+    button = tk.Button(
+        window,
+        text="⛶",
+        command=toggleFullscreen,
+        bg=PURPLE,
+        fg=DARK,
+        activebackground=LIGHT_PURPLE,
+        font=("Arial", 13, "bold"),
+        relief="flat",
+        cursor="hand2"
+    )
+
+    button.place(x=850, y=5, width=38, height=28)
+    addWidget(button)
 
 
 # ---------------- SCREEN HELPERS ----------------
 
-def addWidget(widget):
+def addWidget(widget, trackPlace=True):
     screenWidgets.append(widget)
+
+    if trackPlace:
+        info = widget.place_info()
+
+        if info and "x" in info and "y" in info:
+            try:
+                widget._base_place = {
+                    "x": float(info.get("x", 0)),
+                    "y": float(info.get("y", 0)),
+                    "width": float(info.get("width", widget.winfo_reqwidth())),
+                    "height": float(info.get("height", widget.winfo_reqheight()))
+                }
+            except (TypeError, ValueError):
+                widget._base_place = None
+
+    try:
+        widget._base_font = widget.cget("font")
+    except tk.TclError:
+        widget._base_font = None
+
+    try:
+        wraplength = int(widget.cget("wraplength"))
+        widget._base_wraplength = wraplength if wraplength > 0 else None
+    except (tk.TclError, TypeError, ValueError):
+        widget._base_wraplength = None
+
+    if isFullscreen:
+        scaleWidget(widget)
+
     return widget
 
 
 def changeBackground(image):
-    background.config(image=image)
+    global currentBackgroundPath
+
+    if image == mainImage:
+        currentBackgroundPath = os.path.join(folderPath, "background.png")
+    else:
+        currentBackgroundPath = os.path.join(folderPath, "quiz_background.png")
+
+    if isFullscreen:
+        resizeBackground()
+    else:
+        background.config(image=image)
 
 
 def clearScreen():
 
-    global pendingQuestion
+    global pendingQuestion, progressCanvas
 
     if pendingQuestion is not None:
         window.after_cancel(pendingQuestion)
         pendingQuestion = None
 
     for widget in screenWidgets:
-        widget.destroy()
+        try:
+            if widget.winfo_exists():
+                widget.destroy()
+        except tk.TclError:
+            pass
 
     screenWidgets.clear()
+    progressCanvas = None
     difficultyButtons.clear()
 
 
@@ -177,6 +375,7 @@ def displayMenu():
     )
 
     createDifficultyButtons()
+    addFullscreenButton()
 
 
 # ---------------- DIFFICULTY BUTTONS ----------------
@@ -273,6 +472,7 @@ def howToPlay():
     )
 
     makeButton("BACK TO MENU", displayMenu, 742, 265, 115, 30)
+    addFullscreenButton()
 
 
 # ---------------- EXIT ----------------
@@ -348,14 +548,23 @@ def nextQuestion():
 
 def updateProgress():
 
+    if progressCanvas is None or not progressCanvas.winfo_exists():
+        return
+
     progressCanvas.delete("all")
 
+    scaleX, scaleY = getScaleFactors()
+    canvasWidth = max(1, round(610 * scaleX))
+    canvasHeight = max(1, round(12 * scaleY))
+    filledWidth = canvasWidth * questionNumber / 10
+
     progressCanvas.create_rectangle(
-        0, 0, 610, 12, fill=LIGHT_PURPLE, outline=""
+        0, 0, canvasWidth, canvasHeight,
+        fill=LIGHT_PURPLE, outline=""
     )
 
     progressCanvas.create_rectangle(
-        0, 0, 610 * questionNumber / 10, 12,
+        0, 0, filledWidth, canvasHeight,
         fill=PURPLE, outline=""
     )
 
@@ -442,6 +651,7 @@ def displayProblem():
         font=QUESTION_FONT
     )
     question.place(relx=0.5, rely=0.5, anchor="center")
+    addWidget(question, trackPlace=False)
 
     makeLabel(
         "ENTER YOUR ANSWER:",
@@ -504,6 +714,7 @@ def displayProblem():
         returnToMenu,
         740, 235, 115, 28
     )
+    addFullscreenButton()
 
 
 # ---------------- SUBMIT ANSWER ----------------
@@ -626,6 +837,7 @@ def displayResults():
     makeButton("PLAY AGAIN", restartQuiz, 45, 335, 150, 40)
     makeButton("MAIN MENU", displayMenu, 210, 335, 150, 40)
     makeButton("EXIT", exitQuiz, 375, 335, 100, 40)
+    addFullscreenButton()
 
 
 # ---------------- RESTART QUIZ ----------------
@@ -646,5 +858,7 @@ def restartQuiz():
 
 # ---------------- RUN PROGRAM ----------------
 
+window.bind("<Escape>", leaveFullscreen)
+window.bind("<F11>", lambda event: toggleFullscreen())
 displayMenu()
 window.mainloop()
