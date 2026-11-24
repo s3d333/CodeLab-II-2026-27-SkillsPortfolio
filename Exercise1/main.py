@@ -1,48 +1,32 @@
-
-import tkinter as tk
+from tkinter import *
 from tkinter import messagebox
-import random
+from PIL import ImageTk, Image
 import os
-import tkinter.font as tkfont
-from PIL import Image, ImageTk
-# ---------------- WINDOW SETUP ----------------
+import random
 
-window = tk.Tk()
-window.title("Maths Quiz")
-window.geometry("900x550")
-window.resizable(False, False)
+try:
+    import pygame
+    pygame.mixer.init()
+    audio_ok = True
+except Exception:
+    audio_ok = False
 
-BASE_WIDTH = 900
-BASE_HEIGHT = 550
+root = Tk()
+root.title("Maths Quiz")
+root.geometry("900x550")
+root.resizable(0, 0)
 
-folderPath = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RES_DIR = os.path.join(BASE_DIR, "Resources")
+AUDIO_DIR = os.path.join(RES_DIR, "Audio")
+IMG_DIR = os.path.join(RES_DIR, "Images")
 
-# Set the small feather logo as the application/window icon.
-# Keep iconImage as a variable so Tkinter does not discard the image.
-# Set the calculator logo in the Windows title bar
-# Load calculator icon for the window title bar
-iconPath = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "app_icon.ico"
-)
+try:
+    root.iconbitmap(os.path.join(BASE_DIR, "app_icon.ico"))
+except Exception:
+    pass
 
-window.iconbitmap(iconPath) 
-
-mainImage = tk.PhotoImage(
-    file=os.path.join(folderPath, "background.png")
-)
-
-quizImage = tk.PhotoImage(
-    file=os.path.join(folderPath, "quiz_background.png")
-)
-
-background = tk.Label(window, image=mainImage, bd=0)
-background.place(x=0, y=0, width=BASE_WIDTH, height=BASE_HEIGHT)
-currentBackgroundPath = os.path.join(folderPath, "background.png")
-fullscreenBackground = None
-
-# ---------------- COLOURS AND FONTS ----------------
-
+# Colours
 PURPLE = "#A98AEF"
 LIGHT_PURPLE = "#D8C8FF"
 DARK_PURPLE = "#38245E"
@@ -51,814 +35,474 @@ WHITE = "#FFFFFF"
 GREY = "#777777"
 PALE_PURPLE = "#F1EAFE"
 
-TITLE_FONT = ("Nunito", 35, "bold")
-BUTTON_FONT = ("Nunito", 10, "bold")
-QUESTION_FONT = ("Nunito", 25, "bold")
+# Images
+bg_open = Image.open(os.path.join(IMG_DIR, "background.png"))
+main_bg = ImageTk.PhotoImage(bg_open.resize((900, 550)))
 
-# ---------------- QUIZ VARIABLES ----------------
+quiz_bg_open = Image.open(os.path.join(IMG_DIR, "quiz_background.png"))
+quiz_bg = ImageTk.PhotoImage(quiz_bg_open.resize((900, 550)))
 
-currentLevel = ""
-correctAnswer = 0
+fs_icon = ImageTk.PhotoImage(
+    Image.open(os.path.join(IMG_DIR, "logofullscreen_2.png")).resize((20, 20))
+)
+
+# Audio & background music
+correct_sfx = None
+wrong_sfx = None
+music_ok = False
+
+if audio_ok:
+    try:
+        correct_sfx = pygame.mixer.Sound(os.path.join(AUDIO_DIR, "correct.wav"))
+        correct_sfx.set_volume(0.7)
+    except Exception:
+        pass
+    try:
+        wrong_sfx = pygame.mixer.Sound(os.path.join(AUDIO_DIR, "wrong.wav"))
+        wrong_sfx.set_volume(0.7)
+    except Exception:
+        pass
+    try:
+        pygame.mixer.music.load(os.path.join(AUDIO_DIR, "background_music.mp3"))
+        pygame.mixer.music.set_volume(0.5)
+        pygame.mixer.music.play(-1)
+        music_ok = True
+    except Exception:
+        pass
+
+# State
+level = ""
+answer = 0
 attempts = 0
 score = 0
-questionNumber = 0
-firstTryCorrect = 0
-pendingQuestion = None
-
-screenWidgets = []
-difficultyButtons = []
-
-answerEntry = None
-submitButton = None
-feedbackLabel = None
-attemptLabel = None
-scoreLabel = None
-progressCanvas = None
-isFullscreen = False
+q_num = 0
+first_try = 0
+is_fullscreen = False
+syncing = False
 
 
-# ---------------- FULL SCREEN CONTROL ----------------
-
-def getScaleFactors():
-    """Return the current horizontal and vertical layout scale."""
-    width = max(1, window.winfo_width())
-    height = max(1, window.winfo_height())
-
-    return width / BASE_WIDTH, height / BASE_HEIGHT
-
-
-def resizeBackground():
-    """Resize the active background image to cover the whole window."""
-    global fullscreenBackground
-
-    if isFullscreen:
-        width = max(1, window.winfo_width())
-        height = max(1, window.winfo_height())
-
-        image = Image.open(currentBackgroundPath).convert("RGB")
-        image = image.resize(
-            (width, height),
-            Image.Resampling.LANCZOS
-        )
-
-        fullscreenBackground = ImageTk.PhotoImage(image)
-        background.config(image=fullscreenBackground)
-        background.place(x=0, y=0, width=width, height=height)
-    else:
-        fullscreenBackground = None
-
-        if os.path.basename(currentBackgroundPath) == "background.png":
-            background.config(image=mainImage)
-        else:
-            background.config(image=quizImage)
-
-        background.place(x=0, y=0, width=BASE_WIDTH, height=BASE_HEIGHT)
-
-
-def scaleWidget(widget):
-    """Apply scaled position, size, font and wrapping to one widget."""
-    if not widget.winfo_exists():
+def set_volume(val):
+    global syncing
+    if syncing:
         return
-
-    scaleX, scaleY = getScaleFactors()
-    fontScale = min(scaleX, scaleY)
-
-    basePlace = getattr(widget, "_base_place", None)
-
-    if basePlace:
-        widget.place_configure(
-            x=round(basePlace["x"] * scaleX),
-            y=round(basePlace["y"] * scaleY),
-            width=max(1, round(basePlace["width"] * scaleX)),
-            height=max(1, round(basePlace["height"] * scaleY))
-        )
-
-    baseFont = getattr(widget, "_base_font", None)
-
-    if baseFont:
-        try:
-            actual = tkfont.Font(root=window, font=baseFont).actual()
-            scaledSize = max(7, round(abs(int(actual["size"])) * fontScale))
-
-            widget.configure(font=(
-                actual["family"],
-                scaledSize,
-                actual["weight"],
-                actual["slant"],
-                actual["underline"],
-                actual["overstrike"]
-            ))
-        except (tk.TclError, TypeError, ValueError):
-            pass
-
-    baseWraplength = getattr(widget, "_base_wraplength", None)
-
-    if baseWraplength is not None:
-        try:
-            widget.configure(
-                wraplength=max(1, round(baseWraplength * scaleX))
-            )
-        except tk.TclError:
-            pass
+    vol = int(float(val))
+    if audio_ok and music_ok:
+        pygame.mixer.music.set_volume(vol / 100)
+    syncing = True
+    for s in sliders:
+        if s.get() != vol:
+            s.set(vol)
+    syncing = False
 
 
-def applyFullscreenLayout():
-    """Scale every registered widget to fit the current screen."""
-    resizeBackground()
-
-    for widget in screenWidgets:
-        scaleWidget(widget)
-
-    if progressCanvas is not None and progressCanvas.winfo_exists():
-        updateProgress()
+def draw_progress(w=610, h=12):
+    progress.delete("all")
+    progress.create_rectangle(0, 0, w, h, fill=LIGHT_PURPLE, outline="")
+    progress.create_rectangle(0, 0, w * q_num / 10, h, fill=PURPLE, outline="")
 
 
-def toggleFullscreen():
-    """Switch between the original window and a screen-filling layout."""
-    global isFullscreen
+def place_ui(w, h):
+    sx = w / 900
+    sy = h / 550
 
-    isFullscreen = not isFullscreen
+    def p(widget, x, y, width=None, height=None):
+        kw = {"x": int(x * sx), "y": int(y * sy)}
+        if width is not None:
+            kw["width"] = int(width * sx)
+        if height is not None:
+            kw["height"] = int(height * sy)
+        widget.place(**kw)
 
-    if isFullscreen:
-        window.attributes("-fullscreen", True)
+    for frm in frames:
+        frm.config(width=w, height=h)
+    for bg_lbl in bg_labels:
+        bg_lbl.place(x=0, y=0, width=w, height=h)
+
+    # Menu
+    p(welcome_lbl, 45, 85, 400, 35)
+    p(title_lbl, 45, 115, 500, 65)
+    p(line_frm, 48, 183, 230, max(2, int(5 * sy)) / sy)
+    p(tagline_lbl, 45, 195, 420, 30)
+    p(subtitle_lbl, 45, 235, 430, 30)
+    p(start_btn, 45, 290, 160, 42)
+    p(help_btn, 220, 290, 160, 42)
+    p(exit_btn, 395, 290, 100, 42)
+    p(info_title_lbl, 714, 65, 165, 35)
+    p(info_body_lbl, 714, 105, 165, 190)
+    p(btn_easy, 115, 439, 160, 20)
+    p(btn_mod, 293, 439, 160, 20)
+    p(btn_adv, 471, 439, 160, 20)
+    p(example_lbl, 650, 345, 240, 130)
+
+    # Help
+    p(help_title_lbl, 45, 65, 450, 50)
+    p(help_body_lbl, 50, 130, 560, 260)
+    p(help_side_lbl, 718, 65, 165, 30)
+    p(help_back_btn, 730, 265, 140, 32)
+
+    # Quiz
+    p(q_num_lbl, 50, 88, 250, 35)
+    p(lvl_lbl, 475, 88, 190, 35)
+    p(percent_lbl, 50, 125, 150, 20)
+    bar_w = max(1, int(610 * sx))
+    bar_h = max(4, int(12 * sy))
+    progress.config(width=bar_w, height=bar_h)
+    progress.place(x=int(50 * sx), y=int(148 * sy))
+    draw_progress(bar_w, bar_h)
+    p(q_panel, 55, 180, 610, 95)
+    q_label.place(relx=0.5, rely=0.5, anchor=CENTER)
+    p(enter_lbl, 55, 295, 170, 32)
+    p(ans_entry, 225, 295, 150, 32)
+    p(attempt_lbl, 55, 335, 200, 25)
+    p(feedback_lbl, 55, 360, 420, 25)
+    p(submit_btn, 495, 292, 150, 35)
+    p(next_btn, 495, 335, 150, 32)
+    p(quiz_side_lbl, 725, 55, 140, 25)
+    p(score_lbl, 725, 95, 140, 48)
+    p(done_lbl, 725, 150, 140, 60)
+    p(quiz_back_btn, 735, 235, 120, 28)
+
+    # Results
+    p(res_title_lbl, 45, 65, 500, 50)
+    p(res_sub_lbl, 45, 140, 250, 30)
+    p(final_score_lbl, 45, 175, 300, 55)
+    p(grade_lbl, 370, 175, 220, 45)
+    p(first_try_lbl, 45, 245, 400, 35)
+    p(diff_lbl, 45, 280, 300, 30)
+    p(play_again_btn, 45, 335, 150, 40)
+    p(res_menu_btn, 210, 335, 150, 40)
+    p(res_exit_btn, 375, 335, 100, 40)
+
+    # Bottom-right music slider + fullscreen button on every page
+    btn_w, btn_h = int(36 * sx), int(30 * sy)
+    sld_w, sld_h = int(135 * sx), max(32, int(38 * sy))
+    lbl_h = int(18 * sy)
+
+    fs_x = w - btn_w - int(12 * sx)
+    fs_y = h - btn_h - int(12 * sy)
+    sld_x = fs_x - sld_w - int(10 * sx)
+    sld_y = h - sld_h - int(10 * sy)
+    lbl_y = sld_y - lbl_h - int(2 * sy)
+
+    for lbl, sld, btn in bottom_controls:
+        lbl.place(x=sld_x, y=lbl_y, width=sld_w, height=lbl_h)
+        sld.place(x=sld_x, y=sld_y, width=sld_w, height=sld_h)
+        btn.place(x=fs_x, y=fs_y, width=btn_w, height=btn_h)
+
+
+def toggle_fullscreen():
+    global is_fullscreen, main_bg, quiz_bg
+    is_fullscreen = not is_fullscreen
+
+    if is_fullscreen:
+        root.resizable(1, 1)
+        root.attributes("-fullscreen", True)
+        root.update_idletasks()
+        w, h = root.winfo_screenwidth(), root.winfo_screenheight()
     else:
-        window.attributes("-fullscreen", False)
-        window.geometry(f"{BASE_WIDTH}x{BASE_HEIGHT}")
+        root.attributes("-fullscreen", False)
+        root.geometry("900x550")
+        root.resizable(0, 0)
+        w, h = 900, 550
 
-    window.update_idletasks()
-    applyFullscreenLayout()
+    main_bg = ImageTk.PhotoImage(bg_open.resize((w, h)))
+    quiz_bg = ImageTk.PhotoImage(quiz_bg_open.resize((w, h)))
+    menu_bg_lbl.config(image=main_bg)
+    for bg_lbl in (help_bg_lbl, quiz_bg_lbl, results_bg_lbl):
+        bg_lbl.config(image=quiz_bg)
 
-
-def leaveFullscreen(event=None):
-    """Allow Escape to leave fullscreen mode."""
-    if isFullscreen:
-        toggleFullscreen()
-
-
-def addFullscreenButton():
-    """Add the fullscreen toggle to the current screen."""
-    button = tk.Button(
-        window,
-        text="⛶",
-        command=toggleFullscreen,
-        bg=PURPLE,
-        fg=DARK,
-        activebackground=LIGHT_PURPLE,
-        font=("Arial", 13, "bold"),
-        relief="flat",
-        cursor="hand2"
-    )
-
-    button.place(x=850, y=5, width=38, height=28)
-    addWidget(button)
+    place_ui(w, h)
 
 
-# ---------------- SCREEN HELPERS ----------------
-
-def addWidget(widget, trackPlace=True):
-    screenWidgets.append(widget)
-
-    if trackPlace:
-        info = widget.place_info()
-
-        if info and "x" in info and "y" in info:
-            try:
-                widget._base_place = {
-                    "x": float(info.get("x", 0)),
-                    "y": float(info.get("y", 0)),
-                    "width": float(info.get("width", widget.winfo_reqwidth())),
-                    "height": float(info.get("height", widget.winfo_reqheight()))
-                }
-            except (TypeError, ValueError):
-                widget._base_place = None
-
-    try:
-        widget._base_font = widget.cget("font")
-    except tk.TclError:
-        widget._base_font = None
-
-    try:
-        wraplength = int(widget.cget("wraplength"))
-        widget._base_wraplength = wraplength if wraplength > 0 else None
-    except (tk.TclError, TypeError, ValueError):
-        widget._base_wraplength = None
-
-    if isFullscreen:
-        scaleWidget(widget)
-
-    return widget
+def switch_frame(frame):
+    frame.tkraise()
 
 
-def changeBackground(image):
-    global currentBackgroundPath
-
-    if image == mainImage:
-        currentBackgroundPath = os.path.join(folderPath, "background.png")
-    else:
-        currentBackgroundPath = os.path.join(folderPath, "quiz_background.png")
-
-    if isFullscreen:
-        resizeBackground()
-    else:
-        background.config(image=image)
+def exit_quiz():
+    if messagebox.askyesno("Exit Maths Quiz", "Are you sure you want to exit?"):
+        root.destroy()
 
 
-def clearScreen():
-
-    global pendingQuestion, progressCanvas
-
-    if pendingQuestion is not None:
-        window.after_cancel(pendingQuestion)
-        pendingQuestion = None
-
-    for widget in screenWidgets:
-        try:
-            if widget.winfo_exists():
-                widget.destroy()
-        except tk.TclError:
-            pass
-
-    screenWidgets.clear()
-    progressCanvas = None
-    difficultyButtons.clear()
+def go_to_menu():
+    global level, score, q_num, attempts, first_try
+    level = ""
+    score = q_num = attempts = first_try = 0
+    for b in (btn_easy, btn_mod, btn_adv):
+        b.config(text="CONFIRM", bg=WHITE)
+    example_lbl.config(text="")
+    switch_frame(menu_frame)
 
 
-def makeButton(text, command, x, y, width, height):
-
-    button = tk.Button(
-        window,
-        text=text,
-        command=command,
-        bg=PURPLE,
-        fg=DARK,
-        activebackground=LIGHT_PURPLE,
-        activeforeground=DARK,
-        font=BUTTON_FONT,
-        relief="flat",
-        cursor="hand2"
-    )
-
-    button.place(x=x, y=y, width=width, height=height)
-    return addWidget(button)
+def confirm_return():
+    if messagebox.askyesno("Return to Menu", "Are you sure you want to return to the main menu?"):
+        go_to_menu()
 
 
-def makeLabel(text, x, y, width, height,
-              size=12, colour=DARK, bold=False,
-              backgroundColour=WHITE, justify="left"):
-
-    label = tk.Label(
-        window,
-        text=text,
-        bg=backgroundColour,
-        fg=colour,
-        font=("Nunito", size, "bold" if bold else "normal"),
-        justify=justify,
-        anchor="center" if justify == "center" else "w",
-        wraplength=width - 12
-    )
-
-    label.place(x=x, y=y, width=width, height=height)
-    return addWidget(label)
-
-
-# ---------------- MAIN MENU ----------------
-
-def displayMenu():
-
-    global currentLevel, score, questionNumber
-    global attempts, firstTryCorrect
-
-    clearScreen()
-    changeBackground(mainImage)
-
-    currentLevel = ""
-    score = 0
-    questionNumber = 0
-    attempts = 0
-    firstTryCorrect = 0
-
-    makeLabel("WELCOME TO", 45, 85, 400, 35,
-              17, DARK_PURPLE, True)
-
-    makeLabel("MATHS QUIZ", 45, 115, 500, 65,
-              35, DARK, True)
-
-    line = tk.Frame(window, bg=PURPLE)
-    line.place(x=48, y=183, width=230, height=5)
-    addWidget(line)
-
-    makeLabel(
-        "TEST YOUR BRAIN. BEAT THE CHALLENGE.",
-        45, 195, 420, 30, 10, GREY, True
-    )
-
-    makeLabel(
-        "Choose your difficulty below and get ready!",
-        45, 235, 430, 30, 11, DARK
-    )
-
-    makeButton("START QUIZ", startQuiz, 45, 290, 160, 42)
-    makeButton("HOW TO PLAY", howToPlay, 220, 290, 160, 42)
-    makeButton("EXIT", exitQuiz, 395, 290, 100, 42)
-
-    makeLabel(
-        "QUIZ INFORMATION",
-        714, 65, 165, 35, 10,
-        DARK_PURPLE, True, WHITE, "center"
-    )
-
-    makeLabel(
-        "10 QUESTIONS\n\nChoose a difficulty.\n\n"
-        "You get two attempts.\n\nEarn points for correct answers.",
-        714, 105, 165, 190, 9,
-        DARK, False, WHITE, "center"
-    )
-
-    createDifficultyButtons()
-    addFullscreenButton()
-
-
-# ---------------- DIFFICULTY BUTTONS ----------------
-
-def createDifficultyButtons():
-
-    levels = ["Easy", "Moderate", "Advanced"]
-    positions = [112, 290, 468]
-
-    for i, level in enumerate(levels):
-
-        button = tk.Button(
-            window,
-            text="CONFIRM",
-            command=lambda selected=level: chooseDifficulty(selected),
-            bg=WHITE,
-            fg=DARK_PURPLE,
-            activebackground=LIGHT_PURPLE,
-            font=("Nunito", 8, "bold"),
-            relief="flat",
-            cursor="hand2"
-        )
-
-        button.place(x=positions[i] + 3, y=439, width=160, height=20)
-        button.level = level
-
-        addWidget(button)
-        difficultyButtons.append(button)
-
-
-def chooseDifficulty(level):
-
-    global currentLevel
-
-    currentLevel = level
-
-    for button in difficultyButtons:
-        if button.level == level:
-            button.config(text="SELECTED", bg=LIGHT_PURPLE)
-        else:
-            button.config(text="CONFIRM", bg=WHITE)
-
-    for widget in screenWidgets[:]:
-        if getattr(widget, "quizInfo", False):
-            widget.destroy()
-            screenWidgets.remove(widget)
+def select_level(chosen):
+    global level
+    level = chosen
+    for b in (btn_easy, btn_mod, btn_adv):
+        b.config(text="CONFIRM", bg=WHITE)
 
     examples = {
-        "Easy": "EASY\nAddition and subtraction\n\n8 + 5 = ?\nAnswer: 13",
-        "Moderate": "MODERATE\nMultiplication and division\n\n48 ÷ 6 + 12 = ?\nAnswer: 20",
-        "Advanced": "ADVANCED\nMulti-step BODMAS questions\n\n2400 ÷ 12 × 3 = ?\nAnswer: 600"
+        "Easy": (btn_easy, "EASY\nAddition and subtraction\n\n8 + 5 = ?\nAnswer: 13"),
+        "Moderate": (btn_mod, "MODERATE\nMultiplication and division\n\n48 ÷ 6 + 12 = ?\nAnswer: 20"),
+        "Advanced": (btn_adv, "ADVANCED\nMulti-step BODMAS questions\n\n2400 ÷ 12 × 3 = ?\nAnswer: 600"),
     }
-
-    info = tk.Label(
-        window,
-        text=examples[level],
-        bg=WHITE,
-        fg=DARK_PURPLE,
-        font=("Nunito", 12, "bold"),
-        justify="center",
-        wraplength=225
-    )
-
-    info.place(x=650, y=345, width=240, height=130)
-    info.quizInfo = True
-    addWidget(info)
+    btn, txt = examples[chosen]
+    btn.config(text="SELECTED", bg=LIGHT_PURPLE)
+    example_lbl.config(text=txt)
 
 
-# ---------------- HOW TO PLAY ----------------
-
-def howToPlay():
-
-    clearScreen()
-    changeBackground(quizImage)
-
-    makeLabel("HOW TO PLAY", 45, 65, 450, 50,
-              25, DARK_PURPLE, True)
-
-    instructions = (
-        "1. Choose Easy, Moderate or Advanced.\n\n"
-        "2. Press START QUIZ.\n\n"
-        "3. Answer all 10 questions.\n\n"
-        "4. You get two attempts for each question.\n\n"
-        "5. A correct first answer earns 10 points.\n\n"
-        "6. A correct second answer earns 5 points.\n\n"
-        "7. Try to get the highest score possible!"
-    )
-
-    makeLabel(instructions, 50, 125, 560, 240, 12, DARK)
-
-    makeLabel(
-        "QUIZ MENU", 718, 65, 165, 30,
-        10, DARK_PURPLE, True, WHITE, "center"
-    )
-
-    makeButton("BACK TO MENU", displayMenu, 742, 265, 115, 30)
-    addFullscreenButton()
-
-
-# ---------------- EXIT ----------------
-
-def exitQuiz():
-
-    if messagebox.askyesno("Exit Maths Quiz", "Are you sure you want to exit?"):
-        window.destroy()
-
-
-# ---------------- RANDOM NUMBER GENERATOR ----------------
-
-def randomInt(level):
-
-    if level == "Easy":
+def get_number(lvl):
+    if lvl == "Easy":
         return random.randint(1, 9)
-    elif level == "Moderate":
+    if lvl == "Moderate":
         return random.randint(10, 99)
-    else:
-        return random.randint(1000, 9999)
+    return random.randint(1000, 9999)
 
 
-# ---------------- OPERATION GENERATOR ----------------
-
-def decideOperation(level):
-
-    if level == "Easy":
+def get_operation(lvl):
+    if lvl == "Easy":
         return random.choice(["+", "-"])
-    elif level == "Moderate":
+    if lvl == "Moderate":
         return random.choice(["+", "-", "*", "/"])
+    return "mixed"
+
+
+def load_question():
+    global answer, attempts
+    attempts = 0
+    n1, n2 = get_number(level), get_number(level)
+    op = get_operation(level)
+
+    if op == "+":
+        answer, q_text = n1 + n2, f"{n1} + {n2} = ?"
+    elif op == "-":
+        if n2 > n1:
+            n1, n2 = n2, n1
+        answer, q_text = n1 - n2, f"{n1} - {n2} = ?"
+    elif op == "*":
+        answer, q_text = n1 * n2, f"{n1} × {n2} = ?"
+    elif op == "/":
+        div = random.randint(2, 9)
+        quot = get_number(level)
+        answer, q_text = quot, f"{quot * div} ÷ {div} = ?"
     else:
-        return "mixed"
+        mult, div = random.randint(2, 9), random.randint(2, 9)
+        answer, q_text = n1 * mult, f"{n1} × {mult * div} ÷ {div} = ?"
+
+    q_label.config(text=q_text)
+    q_num_lbl.config(text=f"QUESTION {q_num} / 10")
+    lvl_lbl.config(text=f"{level.upper()} LEVEL")
+    percent_lbl.config(text=f"{(q_num - 1) * 10}% COMPLETE")
+    done_lbl.config(text=f"QUESTIONS\nCOMPLETED\n{q_num - 1} / 10")
+    score_lbl.config(text=f"SCORE\n{score} / 100")
+    attempt_lbl.config(text="ATTEMPT 1 OF 2")
+    feedback_lbl.config(text="You have two chances. Good luck!", fg=GREY)
+
+    ans_entry.config(state="normal")
+    ans_entry.delete(0, END)
+    ans_entry.focus()
+    submit_btn.config(state="normal")
+    next_btn.config(state="disabled")
+
+    if is_fullscreen:
+        w, h = root.winfo_screenwidth(), root.winfo_screenheight()
+        draw_progress(max(1, int(610 * (w / 900))), max(4, int(12 * (h / 550))))
+    else:
+        draw_progress(610, 12)
 
 
-# ---------------- START QUIZ ----------------
-
-def startQuiz():
-
-    global score, questionNumber, attempts, firstTryCorrect
-
-    if currentLevel == "":
+def start_quiz():
+    global score, q_num, attempts, first_try
+    if level == "":
         messagebox.showwarning("Choose Difficulty", "Please confirm a difficulty first.")
         return
-
-    clearScreen()
-    changeBackground(quizImage)
-
-    score = 0
-    questionNumber = 0
-    attempts = 0
-    firstTryCorrect = 0
-
-    nextQuestion()
+    score = attempts = first_try = 0
+    q_num = 1
+    load_question()
+    switch_frame(quiz_frame)
 
 
-# ---------------- NEXT QUESTION ----------------
-
-def nextQuestion():
-
-    global questionNumber, pendingQuestion
-
-    pendingQuestion = None
-    questionNumber += 1
-
-    if questionNumber > 10:
-        displayResults()
-        return
-
-    displayProblem()
-
-
-# ---------------- PROGRESS BAR ----------------
-
-def updateProgress():
-
-    if progressCanvas is None or not progressCanvas.winfo_exists():
-        return
-
-    progressCanvas.delete("all")
-
-    scaleX, scaleY = getScaleFactors()
-    canvasWidth = max(1, round(610 * scaleX))
-    canvasHeight = max(1, round(12 * scaleY))
-    filledWidth = canvasWidth * questionNumber / 10
-
-    progressCanvas.create_rectangle(
-        0, 0, canvasWidth, canvasHeight,
-        fill=LIGHT_PURPLE, outline=""
-    )
-
-    progressCanvas.create_rectangle(
-        0, 0, filledWidth, canvasHeight,
-        fill=PURPLE, outline=""
-    )
-
-
-# ---------------- DISPLAY QUESTION ----------------
-
-def displayProblem():
-
-    global correctAnswer, attempts
-    global answerEntry, submitButton
-    global feedbackLabel, attemptLabel
-    global scoreLabel, progressCanvas
-
-    attempts = 0
-    clearScreen()
-    changeBackground(quizImage)
-
-    number1 = randomInt(currentLevel)
-    number2 = randomInt(currentLevel)
-    operation = decideOperation(currentLevel)
-
-    if operation == "+":
-        correctAnswer = number1 + number2
-        questionText = str(number1) + " + " + str(number2)
-
-    elif operation == "-":
-        if number2 > number1:
-            number1, number2 = number2, number1
-        correctAnswer = number1 - number2
-        questionText = str(number1) + " - " + str(number2)
-
-    elif operation == "*":
-        correctAnswer = number1 * number2
-        questionText = str(number1) + " × " + str(number2)
-
-    elif operation == "/":
-        divisor = random.randint(2, 9)
-        quotient = randomInt(currentLevel)
-        number1 = quotient * divisor
-        correctAnswer = quotient
-        questionText = str(number1) + " ÷ " + str(divisor)
-
+def next_question():
+    global q_num
+    q_num += 1
+    if q_num > 10:
+        show_results()
+        switch_frame(results_frame)
     else:
-        number3 = random.randint(2, 9)
-        multiplier = random.randint(2, 9)
-        number2 = number3 * multiplier
-        correctAnswer = number1 * multiplier
-        questionText = str(number1) + " × " + str(number2) + " ÷ " + str(number3)
-
-    # LEFT QUESTION PANEL
-
-    makeLabel(
-        "QUESTION " + str(questionNumber) + " / 10",
-        50, 88, 250, 35, 14, DARK_PURPLE, True
-    )
-
-    makeLabel(
-        currentLevel.upper() + " LEVEL",
-        475, 88, 190, 35, 11, GREY, True, WHITE, "center"
-    )
-
-    makeLabel(
-        str(questionNumber * 10) + "% COMPLETE",
-        50, 125, 150, 20, 9, GREY, True
-    )
-
-    progressCanvas = tk.Canvas(
-        window, width=610, height=12,
-        bg=WHITE, highlightthickness=0
-    )
-    progressCanvas.place(x=50, y=148)
-    addWidget(progressCanvas)
-    updateProgress()
-
-    questionPanel = tk.Frame(window, bg=PALE_PURPLE)
-    questionPanel.place(x=55, y=180, width=610, height=95)
-    addWidget(questionPanel)
-
-    question = tk.Label(
-        questionPanel,
-        text=questionText + " = ?",
-        bg=PALE_PURPLE,
-        fg=DARK,
-        font=QUESTION_FONT
-    )
-    question.place(relx=0.5, rely=0.5, anchor="center")
-    addWidget(question, trackPlace=False)
-
-    makeLabel(
-        "ENTER YOUR ANSWER:",
-        55, 295, 170, 32, 10, DARK, True
-    )
-
-    answerEntry = tk.Entry(
-        window, font=("Nunito", 15),
-        relief="solid", bd=1, justify="center"
-    )
-    answerEntry.place(x=225, y=295, width=150, height=32)
-    addWidget(answerEntry)
-    answerEntry.focus()
-
-    attemptLabel = makeLabel(
-        "ATTEMPT 1 OF 2",
-        55, 335, 200, 25, 9, DARK_PURPLE, True
-    )
-
-    feedbackLabel = makeLabel(
-        "You have two chances. Good luck!",
-        55, 360, 390, 25, 9, GREY
-    )
-
-    # SUBMIT BUTTON MOVED TO BOTTOM RIGHT OF QUESTION PANEL
-
-    submitButton = makeButton(
-        "SUBMIT ANSWER",
-        submitAnswer,
-        495, 335, 150, 35
-    )
-
-    answerEntry.bind("<Return>", lambda event: submitAnswer())
-
-    # RIGHT PANEL - SMALLER AND MOVED UP
-
-    makeLabel(
-        "QUIZ MENU",
-        725, 55, 140, 25,
-        15, DARK_PURPLE, True, WHITE, "center"
-    )
-
-    scoreLabel = makeLabel(
-        "SCORE\n" + str(score) + " / 100",
-        725, 95, 140, 48,
-        10, DARK_PURPLE, True, WHITE, "center"
-    )
-
-    makeLabel(
-        "QUESTIONS\nCOMPLETED\n" +
-        str(questionNumber - 1) + " / 10",
-        725, 150, 140, 60,
-        8, DARK_PURPLE, True, WHITE, "center"
-    )
-
-    # BACK BUTTON MOVED UP AND MADE SMALLER
-
-    makeButton(
-        "BACK TO MENU",
-        returnToMenu,
-        740, 235, 115, 28
-    )
-    addFullscreenButton()
+        load_question()
 
 
-# ---------------- SUBMIT ANSWER ----------------
-
-def submitAnswer():
-
-    global attempts, score, firstTryCorrect
-
+def check_answer(event=None):
+    global attempts, score, first_try
     if attempts >= 2:
         return
 
     try:
-        userAnswer = int(answerEntry.get())
+        user_ans = int(ans_entry.get())
     except ValueError:
-        feedbackLabel.config(text="Please enter a whole number.", fg="red")
+        feedback_lbl.config(text="Please enter a whole number.", fg="red")
         return
 
     attempts += 1
-    attemptLabel.config(text="ATTEMPT " + str(attempts) + " OF 2")
+    attempt_lbl.config(text=f"ATTEMPT {attempts} OF 2")
 
-    if userAnswer == correctAnswer:
-
+    if user_ans == answer:
+        if audio_ok and correct_sfx:
+            correct_sfx.play()
+        pts = 10 if attempts == 1 else 5
+        score += pts
         if attempts == 1:
-            score += 10
-            firstTryCorrect += 1
-            feedbackLabel.config(text="Correct! You earned 10 points.", fg="green")
-        else:
-            score += 5
-            feedbackLabel.config(text="Correct! You earned 5 points.", fg="green")
-
-        finishQuestion()
-
+            first_try += 1
+        feedback_lbl.config(text=f"Correct! You earned {pts} points.", fg="green")
+        score_lbl.config(text=f"SCORE\n{score} / 100")
+        ans_entry.config(state="disabled")
+        submit_btn.config(state="disabled")
+        next_btn.config(state="normal")
     elif attempts == 1:
-        feedbackLabel.config(text="Not quite! Try one more time.", fg="red")
-        answerEntry.delete(0, tk.END)
-        answerEntry.focus()
-
+        if audio_ok and wrong_sfx:
+            wrong_sfx.play()
+        feedback_lbl.config(text="Not quite! Try one more time.", fg="red")
+        ans_entry.delete(0, END)
+        ans_entry.focus()
     else:
-        feedbackLabel.config(
-            text="Incorrect! Answer: " + str(correctAnswer),
-            fg="red"
-        )
-        finishQuestion()
+        if audio_ok and wrong_sfx:
+            wrong_sfx.play()
+        feedback_lbl.config(text=f"Incorrect! Answer: {answer}", fg="red")
+        ans_entry.config(state="disabled")
+        submit_btn.config(state="disabled")
+        next_btn.config(state="normal")
 
 
-# ---------------- FINISH QUESTION ----------------
+def show_results():
+    grades = [(90, "A+"), (80, "A"), (70, "B"), (60, "C"), (50, "D")]
+    grade = next((g for cut, g in grades if score >= cut), "F")
+    final_score_lbl.config(text=f"{score} / 100")
+    grade_lbl.config(text=f"GRADE: {grade}")
+    first_try_lbl.config(text=f"Correct on first attempt: {first_try} / 10")
+    diff_lbl.config(text=f"Difficulty: {level}")
 
-def finishQuestion():
 
-    answerEntry.config(state="disabled")
-    submitButton.config(state="disabled")
+def play_again():
+    global score, q_num, attempts, first_try
+    score = attempts = first_try = 0
+    q_num = 1
+    load_question()
+    switch_frame(quiz_frame)
 
-    scoreLabel.config(
-        text="SCORE\n" + str(score) + " / 100"
+
+def add_bottom_controls(parent):
+    lbl = Label(parent, text="MUSIC VOLUME", bg=PURPLE, fg=DARK, font=("Nunito", 7, "bold"))
+    sld = Scale(
+        parent, from_=0, to=100, orient=HORIZONTAL, command=set_volume,
+        bg=PURPLE, fg=DARK, troughcolor=LIGHT_PURPLE, activebackground=DARK_PURPLE,
+        highlightthickness=0, relief="flat"
     )
-
-    scheduleNext(1400)
-
-
-def scheduleNext(delay):
-
-    global pendingQuestion
-    pendingQuestion = window.after(delay, nextQuestion)
+    sld.set(50)
+    btn = Button(parent, image=fs_icon, command=toggle_fullscreen, bg=PURPLE, activebackground=LIGHT_PURPLE, relief="flat")
+    sliders.append(sld)
+    bottom_controls.append((lbl, sld, btn))
 
 
-# ---------------- BACK TO MENU ----------------
+frames = []
+bg_labels = []
+sliders = []
+bottom_controls = []
 
-def returnToMenu():
+# Frame 1: Menu
+menu_frame = Frame(root, width=900, height=550)
+menu_frame.place(x=0, y=0)
+menu_bg_lbl = Label(menu_frame, image=main_bg, bd=0)
+frames.append(menu_frame)
+bg_labels.append(menu_bg_lbl)
 
-    if messagebox.askyesno(
-        "Return to Menu",
-        "Are you sure you want to return to the main menu?"
-    ):
-        displayMenu()
+welcome_lbl = Label(menu_frame, text="WELCOME TO", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 17, "bold"), anchor="w")
+title_lbl = Label(menu_frame, text="MATHS QUIZ", bg=WHITE, fg=DARK, font=("Nunito", 35, "bold"), anchor="w")
+line_frm = Frame(menu_frame, bg=PURPLE)
+tagline_lbl = Label(menu_frame, text="TEST YOUR BRAIN. BEAT THE CHALLENGE.", bg=WHITE, fg=GREY, font=("Nunito", 10, "bold"), anchor="w")
+subtitle_lbl = Label(menu_frame, text="Choose your difficulty below and get ready!", bg=WHITE, fg=DARK, font=("Nunito", 11), anchor="w")
+start_btn = Button(menu_frame, text="START QUIZ", command=start_quiz, bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat")
+help_btn = Button(menu_frame, text="HOW TO PLAY", command=lambda: switch_frame(help_frame), bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat")
+exit_btn = Button(menu_frame, text="EXIT", command=exit_quiz, bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat")
+info_title_lbl = Label(menu_frame, text="QUIZ INFORMATION", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 10, "bold"))
+info_body_lbl = Label(menu_frame, text="10 QUESTIONS\n\nChoose a difficulty.\n\nYou get two attempts.\n\nEarn points for correct answers.", bg=WHITE, fg=DARK, font=("Nunito", 9))
+btn_easy = Button(menu_frame, text="CONFIRM", command=lambda: select_level("Easy"), bg=WHITE, fg=DARK_PURPLE, activebackground=LIGHT_PURPLE, font=("Nunito", 8, "bold"), relief="flat")
+btn_mod = Button(menu_frame, text="CONFIRM", command=lambda: select_level("Moderate"), bg=WHITE, fg=DARK_PURPLE, activebackground=LIGHT_PURPLE, font=("Nunito", 8, "bold"), relief="flat")
+btn_adv = Button(menu_frame, text="CONFIRM", command=lambda: select_level("Advanced"), bg=WHITE, fg=DARK_PURPLE, activebackground=LIGHT_PURPLE, font=("Nunito", 8, "bold"), relief="flat")
+example_lbl = Label(menu_frame, text="", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 12, "bold"), justify=CENTER)
+add_bottom_controls(menu_frame)
 
+# Frame 2: How to Play
+help_frame = Frame(root, width=900, height=550)
+help_frame.place(x=0, y=0)
+help_bg_lbl = Label(help_frame, image=quiz_bg, bd=0)
+frames.append(help_frame)
+bg_labels.append(help_bg_lbl)
 
-# ---------------- RESULTS SCREEN ----------------
+help_title_lbl = Label(help_frame, text="HOW TO PLAY", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 25, "bold"), anchor="w")
+help_body_lbl = Label(
+    help_frame,
+    text=(
+        "1. Choose Easy, Moderate or Advanced.\n"
+        "2. Press START QUIZ.\n"
+        "3. Answer all 10 questions.\n"
+        "4. You get two attempts for each question.\n"
+        "5. A correct first answer earns 10 points.\n"
+        "6. A correct second answer earns 5 points.\n"
+        "7. Try to get the highest score possible!"
+    ),
+    bg=WHITE, fg=DARK, font=("Nunito", 12), justify=LEFT, anchor="nw"
+)
+help_side_lbl = Label(help_frame, text="QUIZ MENU", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 10, "bold"))
+help_back_btn = Button(help_frame, text="BACK TO MENU", command=lambda: switch_frame(menu_frame), bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat")
+add_bottom_controls(help_frame)
 
-def displayResults():
+# Frame 3: Quiz
+quiz_frame = Frame(root, width=900, height=550)
+quiz_frame.place(x=0, y=0)
+quiz_bg_lbl = Label(quiz_frame, image=quiz_bg, bd=0)
+frames.append(quiz_frame)
+bg_labels.append(quiz_bg_lbl)
 
-    global pendingQuestion
+q_num_lbl = Label(quiz_frame, text="QUESTION 1 / 10", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 14, "bold"), anchor="w")
+lvl_lbl = Label(quiz_frame, text="EASY LEVEL", bg=WHITE, fg=GREY, font=("Nunito", 11, "bold"))
+percent_lbl = Label(quiz_frame, text="0% COMPLETE", bg=WHITE, fg=GREY, font=("Nunito", 9, "bold"), anchor="w")
+progress = Canvas(quiz_frame, width=610, height=12, bg=WHITE, highlightthickness=0)
+q_panel = Frame(quiz_frame, bg=PALE_PURPLE)
+q_label = Label(q_panel, text="", bg=PALE_PURPLE, fg=DARK, font=("Nunito", 25, "bold"))
+enter_lbl = Label(quiz_frame, text="ENTER YOUR ANSWER:", bg=WHITE, fg=DARK, font=("Nunito", 10, "bold"), anchor="w")
+ans_entry = Entry(quiz_frame, font=("Nunito", 15), justify=CENTER)
+ans_entry.bind("<Return>", check_answer)
+attempt_lbl = Label(quiz_frame, text="ATTEMPT 1 OF 2", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 9, "bold"), anchor="w")
+feedback_lbl = Label(quiz_frame, text="You have two chances. Good luck!", bg=WHITE, fg=GREY, font=("Nunito", 9), anchor="w")
+submit_btn = Button(quiz_frame, text="SUBMIT ANSWER", command=check_answer, bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat")
+next_btn = Button(quiz_frame, text="NEXT QUESTION", command=next_question, bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat", state="disabled")
+quiz_side_lbl = Label(quiz_frame, text="QUIZ MENU", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 15, "bold"))
+score_lbl = Label(quiz_frame, text="SCORE\n0 / 100", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 10, "bold"))
+done_lbl = Label(quiz_frame, text="QUESTIONS\nCOMPLETED\n0 / 10", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 8, "bold"))
+quiz_back_btn = Button(quiz_frame, text="BACK TO MENU", command=confirm_return, bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat")
+add_bottom_controls(quiz_frame)
 
-    pendingQuestion = None
-    clearScreen()
-    changeBackground(quizImage)
+# Frame 4: Results
+results_frame = Frame(root, width=900, height=550)
+results_frame.place(x=0, y=0)
+results_bg_lbl = Label(results_frame, image=quiz_bg, bd=0)
+frames.append(results_frame)
+bg_labels.append(results_bg_lbl)
 
-    if score >= 90:
-        grade = "A+"
-    elif score >= 80:
-        grade = "A"
-    elif score >= 70:
-        grade = "B"
-    elif score >= 60:
-        grade = "C"
-    elif score >= 50:
-        grade = "D"
-    else:
-        grade = "F"
+res_title_lbl = Label(results_frame, text="QUIZ COMPLETED!", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 25, "bold"), anchor="w")
+res_sub_lbl = Label(results_frame, text="YOUR FINAL SCORE", bg=WHITE, fg=GREY, font=("Nunito", 12, "bold"), anchor="w")
+final_score_lbl = Label(results_frame, text="0 / 100", bg=WHITE, fg=DARK, font=("Nunito", 32, "bold"), anchor="w")
+grade_lbl = Label(results_frame, text="GRADE: F", bg=WHITE, fg=DARK_PURPLE, font=("Nunito", 20, "bold"), anchor="w")
+first_try_lbl = Label(results_frame, text="Correct on first attempt: 0 / 10", bg=WHITE, fg=DARK, font=("Nunito", 12), anchor="w")
+diff_lbl = Label(results_frame, text="Difficulty: ", bg=WHITE, fg=DARK, font=("Nunito", 11), anchor="w")
+play_again_btn = Button(results_frame, text="PLAY AGAIN", command=play_again, bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat")
+res_menu_btn = Button(results_frame, text="MAIN MENU", command=go_to_menu, bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat")
+res_exit_btn = Button(results_frame, text="EXIT", command=exit_quiz, bg=PURPLE, fg=DARK, activebackground=LIGHT_PURPLE, font=("Nunito", 10, "bold"), relief="flat")
+add_bottom_controls(results_frame)
 
-    makeLabel("QUIZ COMPLETED!", 45, 65, 500, 50,
-              25, DARK_PURPLE, True)
-
-    makeLabel("YOUR FINAL SCORE", 45, 140, 250, 30,
-              12, GREY, True)
-
-    makeLabel(str(score) + " / 100", 45, 175, 300, 55,
-              32, DARK, True)
-
-    makeLabel("GRADE: " + grade, 370, 175, 220, 45,
-              20, DARK_PURPLE, True)
-
-    makeLabel(
-        "Correct on first attempt: " + str(firstTryCorrect) + " / 10",
-        45, 245, 400, 35, 12, DARK
-    )
-
-    makeLabel("Difficulty: " + currentLevel,
-              45, 280, 300, 30, 11, DARK)
-
-    makeButton("PLAY AGAIN", restartQuiz, 45, 335, 150, 40)
-    makeButton("MAIN MENU", displayMenu, 210, 335, 150, 40)
-    makeButton("EXIT", exitQuiz, 375, 335, 100, 40)
-    addFullscreenButton()
-
-
-# ---------------- RESTART QUIZ ----------------
-
-def restartQuiz():
-
-    global score, questionNumber, attempts, firstTryCorrect
-
-    score = 0
-    questionNumber = 0
-    attempts = 0
-    firstTryCorrect = 0
-
-    clearScreen()
-    changeBackground(quizImage)
-    nextQuestion()
-
-
-# ---------------- RUN PROGRAM ----------------
-
-window.bind("<Escape>", leaveFullscreen)
-window.bind("<F11>", lambda event: toggleFullscreen())
-displayMenu()
-window.mainloop()
+place_ui(900, 550)
+switch_frame(menu_frame)
+root.mainloop()
